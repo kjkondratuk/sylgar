@@ -2,23 +2,28 @@ package app
 
 import (
 	"fmt"
+	"github.com/charmbracelet/bubbles/viewport"
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/kjkondratuk/sylgar/api"
 	"log/slog"
+	"strings"
 	"time"
 )
 
 type (
+	// TODO : try using bubbles timer instead?
 	tickMsg struct{}
 )
 
 type MainModel struct {
 	user          string
+	viewport      viewport.Model
 	capi          api.ChatApi
 	refreshTimer  tea.Cmd
 	chats         []string
 	activeChannel string
 	activeMessage string
+	ready         bool
 }
 
 func New(user string, capi api.ChatApi) MainModel {
@@ -33,15 +38,50 @@ func (m MainModel) Init() tea.Cmd {
 }
 
 func (m MainModel) View() string {
-	dsp := ""
-	for _, i := range m.chats {
-		dsp += i + "\n"
+	if !m.ready {
+		return "\n  Loading..."
 	}
-	return dsp
+	return fmt.Sprintf("%s\n%s", m.viewport.View())
 }
 
 func (m MainModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
+	var (
+		cmd  tea.Cmd
+		cmds []tea.Cmd
+	)
 	switch msg := msg.(type) {
+	case tea.WindowSizeMsg:
+		//headerHeight := lipgloss.Height(m.headerView())
+		//footerHeight := lipgloss.Height(m.footerView())
+		//verticalMarginHeight := headerHeight + footerHeight
+
+		if !m.ready {
+			// Since this program is using the full size of the viewport we
+			// need to wait until we've received the window dimensions before
+			// we can initialize the viewport. The initial dimensions come in
+			// quickly, though asynchronously, which is why we wait for them
+			// here.
+			m.viewport = viewport.New(msg.Width, msg.Height)
+			m.viewport.YPosition = 1
+			//m.viewport.HighPerformanceRendering = useHighPerformanceRenderer
+			m.viewport.SetContent(strings.Join(m.chats, "\n"))
+			//if msg.Width != 0 && msg.Height != 0 {
+			m.ready = true
+			//}
+
+			// This is only necessary for high performance rendering, which in
+			// most cases you won't need.
+			//
+			// Render the viewport one line below the header.
+			//m.viewport.YPosition = 1
+		} else {
+			m.viewport.Width = msg.Width
+			m.viewport.Height = msg.Height
+		}
+
+		//cmds = append(cmds, viewport.Sync(m.viewport))
+
+		// TODO : don't use the UI to schedule this
 	case tickMsg:
 		chats, err := m.capi.FetchChatsForUser(m.user, api.WithBefore(time.Now().UTC()))
 		if err != nil {
@@ -50,14 +90,17 @@ func (m MainModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 		m.chats = make([]string, 0)
 		for _, c := range chats {
-			if len(m.chats) < 20 {
-				m.chats = append(m.chats, fmt.Sprintf("%f : %s|%s - %s", c.T, c.Channel, c.User, c.Msg))
+			if c.IsJoin {
+				m.chats = append(m.chats, fmt.Sprintf("%f : %s ----> %s", c.T, c.Channel, c.User))
+			} else if c.IsLeave {
+				m.chats = append(m.chats, fmt.Sprintf("%f : %s <---- %s", c.T, c.Channel, c.User))
 			} else {
-				break
+				m.chats = append(m.chats, fmt.Sprintf("%f : %s|%s - %s", c.T, c.Channel, c.User, c.Msg))
 			}
 		}
-
-		return m, tick()
+		content := strings.Join(m.chats, "\n")
+		m.viewport.SetContent(content)
+		cmds = append(cmds, tick())
 	case tea.KeyMsg:
 		switch {
 		case msg.String() == "ctrl+c":
@@ -67,7 +110,11 @@ func (m MainModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 	}
 
-	return m, nil
+	// handle keyboard and mouse events in the viewport
+	m.viewport, cmd = m.viewport.Update(msg)
+	cmds = append([]tea.Cmd{cmd}, cmds...)
+
+	return m, tea.Batch(cmds...)
 }
 
 func tick() tea.Cmd {

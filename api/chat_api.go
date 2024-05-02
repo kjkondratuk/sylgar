@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"github.com/charmbracelet/bubbles/viewport"
 	"io"
 	"net/http"
 	"time"
@@ -15,9 +16,10 @@ const (
 )
 
 type chatApi struct {
-	client *http.Client
-	pass   string
-	token  *string
+	client   *http.Client
+	viewport viewport.Model
+	pass     string
+	token    *string
 }
 
 type ChatApi interface {
